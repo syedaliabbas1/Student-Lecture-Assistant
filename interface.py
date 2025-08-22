@@ -4,6 +4,7 @@ import tempfile
 import os
 from datetime import datetime
 from rag import RAGPipeline   # <- your RAG class
+from langchain_chroma import Chroma
 
 # Document loaders
 from langchain_community.document_loaders import PyPDFLoader, TextLoader, Docx2txtLoader
@@ -89,6 +90,13 @@ if st.session_state.uploaded_files:
 # ✅ Clear all documents button (optional)
 if st.sidebar.button("🗑️ Clear All Documents") and st.session_state.uploaded_files:
     st.session_state.uploaded_files.clear()
+    st.session_state.rag.vector_store.delete_collection()
+    st.session_state.rag.vector_store = Chroma(
+    collection_name="rag_documents",
+    embedding_function=st.session_state.rag.embeddings,
+    persist_directory="./chroma_db"
+)
+
     # Note: This doesn't clear the vector store, just the tracking
     st.sidebar.warning("Document tracking cleared. Upload files again to re-process.")
 
@@ -111,9 +119,7 @@ for chat_id, chat_data in st.session_state.conversations.items():
 st.title("🔎 Student Lecture Assistant")
 st.caption("Upload your lecture notes and ask questions about them.")
 
-# ✅ Show status if no documents uploaded
-if not st.session_state.uploaded_files:
-    st.info("👆 Please upload your lecture notes using the sidebar to get started.")
+
 
 chat = st.session_state.conversations[st.session_state.active_chat]
 
