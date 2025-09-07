@@ -16,6 +16,27 @@ from langchain_text_splitters import RecursiveCharacterTextSplitter
 # LangGraph imports
 from langgraph.graph import START, StateGraph
 
+import re
+from bs4 import BeautifulSoup
+
+def clean_text(text: str) -> str:
+    """Clean and normalize text for better chunk embeddings."""
+    # 1. Remove HTML/Markdown tags
+    text = BeautifulSoup(text, "html.parser").get_text(separator=" ")
+    
+    # 2. Normalize whitespace
+    text = re.sub(r"\s+", " ", text)
+    
+    # 3. Remove boilerplate patterns (page numbers, headers, footers)
+    text = re.sub(r"Page \d+ of \d+", "", text, flags=re.IGNORECASE)
+    text = re.sub(r"^(\d+)$", "", text, flags=re.MULTILINE)  # remove standalone numbers
+    
+    # 4. Lowercase for consistency
+    text = text.lower()
+    
+    # 5. Trim leading/trailing whitespace
+    return text.strip()
+
 class RAGPipeline:
     def __init__(self):
         self.llm = None
@@ -54,31 +75,39 @@ class RAGPipeline:
         # Initialize ChromaDB vector store
         self.vector_store = Chroma(
             collection_name="rag_documents",
-            embedding_function=self.embeddings,
-            persist_directory="./chroma_db",  # Local storage directory
+            embedding_function=self.embeddings
         )
         
         print("Components initialized successfully!")
     
     def load_and_process_documents(self, docs):
         """
-        Process uploaded documents (PDF, TXT, DOCX) into chunks
+        Process uploaded documents (PDF, TXT, DOCX) into cleaned chunks
         and add them to the Chroma vector store.
         """
         if not docs:
             raise ValueError("No documents provided for processing.")
 
         print(f"Loaded {len(docs)} document(s)")
-        print(f"Total characters in first doc: {len(docs[0].page_content)}")
+        print(f"Total characters in first doc (raw): {len(docs[0].page_content)}")
 
-        # Split documents into chunks
+        # ✅ Pre-clean all documents before splitting
+        cleaned_docs = []
+        for doc in docs:
+            cleaned_content = clean_text(doc.page_content)
+            cleaned_docs.append(Document(
+                page_content=cleaned_content,
+                metadata=doc.metadata
+            ))
+
+        # Split into chunks
         text_splitter = RecursiveCharacterTextSplitter(
-            chunk_size=1000,
-            chunk_overlap=200,
+            chunk_size=800,     # slightly smaller chunks for readability
+            chunk_overlap=100,
             add_start_index=True
         )
-        all_splits = text_splitter.split_documents(docs)
-        print(f"Split into {len(all_splits)} chunks")
+        all_splits = text_splitter.split_documents(cleaned_docs)
+        print(f"Split into {len(all_splits)} cleaned chunks")
 
         # Optional: add section metadata
         total_documents = len(all_splits)
@@ -96,6 +125,11 @@ class RAGPipeline:
         document_ids = self.vector_store.add_documents(all_splits)
         print(f"Indexed {len(document_ids)} document chunks")
 
+        # Print preview of first few cleaned chunks
+        for i, chunk in enumerate(all_splits[:3]):
+            print(f"\n--- Cleaned Chunk {i+1} ---\n{chunk.page_content[:300]}...\n")
+        
+        print("These are all the chunks: ", all_splits)
         return all_splits
     
     def create_basic_rag_graph(self):
@@ -124,6 +158,7 @@ class RAGPipeline:
         # Define nodes
         def retrieve(state: State):
             retrieved_docs = self.vector_store.similarity_search(state["question"])
+            print(f"Retrieved {len(retrieved_docs)} documents for the question: {state['question']} which are: {retrieved_docs}")
             return {"context": retrieved_docs}
         
         def generate(state: State):
