@@ -19,23 +19,6 @@ from langgraph.graph import START, StateGraph
 import re
 from bs4 import BeautifulSoup
 
-def clean_text(text: str) -> str:
-    """Clean and normalize text for better chunk embeddings."""
-    # 1. Remove HTML/Markdown tags
-    text = BeautifulSoup(text, "html.parser").get_text(separator=" ")
-    
-    # 2. Normalize whitespace
-    text = re.sub(r"\s+", " ", text)
-    
-    # 3. Remove boilerplate patterns (page numbers, headers, footers)
-    text = re.sub(r"Page \d+ of \d+", "", text, flags=re.IGNORECASE)
-    text = re.sub(r"^(\d+)$", "", text, flags=re.MULTILINE)  # remove standalone numbers
-    
-    # 4. Lowercase for consistency
-    text = text.lower()
-    
-    # 5. Trim leading/trailing whitespace
-    return text.strip()
 
 class RAGPipeline:
     def __init__(self):
@@ -69,7 +52,7 @@ class RAGPipeline:
         # Use HuggingFace embeddings (free and local)
         from langchain_community.embeddings import HuggingFaceEmbeddings
         self.embeddings = HuggingFaceEmbeddings(
-            model_name="all-MiniLM-L6-v2"
+            model_name="sentence-transformers/all-mpnet-base-v2"
         )
         
         # Initialize ChromaDB vector store
@@ -91,22 +74,12 @@ class RAGPipeline:
         print(f"Loaded {len(docs)} document(s)")
         print(f"Total characters in first doc (raw): {len(docs[0].page_content)}")
 
-        # ✅ Pre-clean all documents before splitting
-        cleaned_docs = []
-        for doc in docs:
-            cleaned_content = clean_text(doc.page_content)
-            cleaned_docs.append(Document(
-                page_content=cleaned_content,
-                metadata=doc.metadata
-            ))
-
         # Split into chunks
         text_splitter = RecursiveCharacterTextSplitter(
-            chunk_size=800,     # slightly smaller chunks for readability
-            chunk_overlap=100,
-            add_start_index=True
+            chunk_size=1000,     # slightly smaller chunks for readability
+            chunk_overlap=200
         )
-        all_splits = text_splitter.split_documents(cleaned_docs)
+        all_splits = text_splitter.split_documents(docs)
         print(f"Split into {len(all_splits)} cleaned chunks")
 
         # Optional: add section metadata
@@ -128,8 +101,8 @@ class RAGPipeline:
         # Print preview of first few cleaned chunks
         for i, chunk in enumerate(all_splits[:3]):
             print(f"\n--- Cleaned Chunk {i+1} ---\n{chunk.page_content[:300]}...\n")
-        
-        print("These are all the chunks: ", all_splits)
+
+        print("These are the first 10 chunks: ", all_splits[:10])
         return all_splits
     
     def create_basic_rag_graph(self):
@@ -144,8 +117,8 @@ class RAGPipeline:
         # Load prompt
         from langchain_core.prompts import PromptTemplate
 
-        template = """You are an assistant for question-answering tasks.
-    Use the following documents to answer the question.
+        template = """You are an expert assistant for question-answering tasks.
+    Use the following pieces of context to answer the question at the end.
     If you don't know the answer, just say that you don't know.
 
         {context}
@@ -164,6 +137,7 @@ class RAGPipeline:
         def generate(state: State):
             docs_content = "\n\n".join(doc.page_content for doc in state["context"])
             messages = prompt.invoke({"question": state["question"], "context": docs_content})
+            print("Question to LLM:", state["question"], "with context:", docs_content)
             response = self.llm.invoke(messages)
             return {"answer": response.content}
         
